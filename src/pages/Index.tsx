@@ -105,6 +105,54 @@ const Index = () => {
     };
   }, []);
 
+  // Real-time simulation: Update metrics every 5 seconds
+  useEffect(() => {
+    const simulateMetrics = async () => {
+      if (services.length === 0) return;
+
+      // Generate new metrics for each service
+      for (const service of services) {
+        const cpuUsage = Math.random() * 100;
+        const memoryUsage = Math.random() * 100;
+        const responseTime = Math.floor(Math.random() * 500) + 50;
+
+        await supabase.from("metrics").insert({
+          service_id: service.id,
+          cpu_usage: cpuUsage,
+          memory_usage: memoryUsage,
+          response_time: responseTime,
+        });
+
+        // Randomly update service status to make it more dynamic
+        if (Math.random() > 0.95) {
+          const statuses: ("up" | "down" | "degraded")[] = ["up", "degraded"];
+          const newStatus = statuses[Math.floor(Math.random() * statuses.length)];
+          
+          await supabase
+            .from("services")
+            .update({ status: newStatus })
+            .eq("id", service.id);
+
+          // Create alert if service becomes degraded
+          if (newStatus === "degraded" && responseTime > 300) {
+            await supabase.from("alerts").insert({
+              service_id: service.id,
+              type: "response_time",
+              severity: "warning",
+              message: `${service.name} response time above threshold`,
+              threshold: 300,
+              resolved: false,
+            });
+          }
+        }
+      }
+    };
+
+    const interval = setInterval(simulateMetrics, 5000);
+
+    return () => clearInterval(interval);
+  }, [services]);
+
   const fetchData = async () => {
     setLoading(true);
     await Promise.all([fetchServices(), fetchMetrics(), fetchAlerts()]);
