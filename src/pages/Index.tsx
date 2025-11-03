@@ -4,8 +4,11 @@ import { ServiceCard } from "@/components/ServiceCard";
 import { MetricsChart } from "@/components/MetricsChart";
 import { AlertsList } from "@/components/AlertsList";
 import { StatsOverview } from "@/components/StatsOverview";
-import { Activity } from "lucide-react";
+import { Activity, LogOut } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { Button } from "@/components/ui/button";
+import { z } from "zod";
 
 interface Service {
   id: string;
@@ -34,7 +37,23 @@ interface Alert {
   created_at: string;
 }
 
+// Validation schemas
+const serviceSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).nullable(),
+  status: z.enum(["up", "down", "degraded"]),
+  user_id: z.string().uuid(),
+});
+
+const metricSchema = z.object({
+  service_id: z.string().uuid(),
+  cpu_usage: z.number().min(0).max(100),
+  memory_usage: z.number().min(0).max(100),
+  response_time: z.number().int().positive(),
+});
+
 const Index = () => {
+  const { user, signOut, isAdmin } = useAuth();
   const [services, setServices] = useState<Service[]>([]);
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -105,54 +124,6 @@ const Index = () => {
     };
   }, []);
 
-  // Real-time simulation: Update metrics every 5 seconds
-  useEffect(() => {
-    const simulateMetrics = async () => {
-      if (services.length === 0) return;
-
-      // Generate new metrics for each service
-      for (const service of services) {
-        const cpuUsage = Math.random() * 100;
-        const memoryUsage = Math.random() * 100;
-        const responseTime = Math.floor(Math.random() * 500) + 50;
-
-        await supabase.from("metrics").insert({
-          service_id: service.id,
-          cpu_usage: cpuUsage,
-          memory_usage: memoryUsage,
-          response_time: responseTime,
-        });
-
-        // Randomly update service status to make it more dynamic
-        if (Math.random() > 0.95) {
-          const statuses: ("up" | "down" | "degraded")[] = ["up", "degraded"];
-          const newStatus = statuses[Math.floor(Math.random() * statuses.length)];
-          
-          await supabase
-            .from("services")
-            .update({ status: newStatus })
-            .eq("id", service.id);
-
-          // Create alert if service becomes degraded
-          if (newStatus === "degraded" && responseTime > 300) {
-            await supabase.from("alerts").insert({
-              service_id: service.id,
-              type: "response_time",
-              severity: "warning",
-              message: `${service.name} response time above threshold`,
-              threshold: 300,
-              resolved: false,
-            });
-          }
-        }
-      }
-    };
-
-    const interval = setInterval(simulateMetrics, 5000);
-
-    return () => clearInterval(interval);
-  }, [services]);
-
   const fetchData = async () => {
     setLoading(true);
     await Promise.all([fetchServices(), fetchMetrics(), fetchAlerts()]);
@@ -163,8 +134,7 @@ const Index = () => {
     const { data, error } = await supabase.from("services").select("*").order("created_at", { ascending: false });
 
     if (error) {
-      console.error("Error fetching services:", error);
-      toast.error("Failed to fetch services");
+      toast.error("Échec du chargement des services");
       return;
     }
 
@@ -179,8 +149,7 @@ const Index = () => {
       .limit(100);
 
     if (error) {
-      console.error("Error fetching metrics:", error);
-      toast.error("Failed to fetch metrics");
+      toast.error("Échec du chargement des métriques");
       return;
     }
 
@@ -195,8 +164,7 @@ const Index = () => {
       .limit(50);
 
     if (error) {
-      console.error("Error fetching alerts:", error);
-      toast.error("Failed to fetch alerts");
+      toast.error("Échec du chargement des alertes");
       return;
     }
 
@@ -204,6 +172,8 @@ const Index = () => {
   };
 
   const seedMockData = async () => {
+    if (!user) return;
+
     // Check if we already have services
     const { data: existingServices } = await supabase.from("services").select("id").limit(1);
 
@@ -213,11 +183,11 @@ const Index = () => {
 
     // Create mock services
     const mockServices = [
-      { name: "API Gateway", description: "Main API gateway service", status: "up" },
-      { name: "Auth Service", description: "Authentication and authorization", status: "up" },
-      { name: "Database", description: "Primary PostgreSQL database", status: "up" },
-      { name: "Cache Service", description: "Redis caching layer", status: "degraded" },
-      { name: "Payment Service", description: "Payment processing", status: "up" },
+      { name: "API Gateway", description: "Main API gateway service", status: "up" as const, user_id: user.id },
+      { name: "Auth Service", description: "Authentication and authorization", status: "up" as const, user_id: user.id },
+      { name: "Database", description: "Primary PostgreSQL database", status: "up" as const, user_id: user.id },
+      { name: "Cache Service", description: "Redis caching layer", status: "degraded" as const, user_id: user.id },
+      { name: "Payment Service", description: "Payment processing", status: "up" as const, user_id: user.id },
     ];
 
     const { data: createdServices, error: servicesError } = await supabase
@@ -226,12 +196,12 @@ const Index = () => {
       .select();
 
     if (servicesError) {
-      console.error("Error creating mock services:", servicesError);
+      toast.error("Échec de la création des données de test");
       return;
     }
 
-    // Create mock metrics for each service
-    if (createdServices) {
+    // Create mock metrics for each service (only if admin)
+    if (createdServices && isAdmin) {
       for (const service of createdServices) {
         const metricsData = Array.from({ length: 20 }, (_, i) => ({
           service_id: service.id,
@@ -243,8 +213,8 @@ const Index = () => {
 
         await supabase.from("metrics").insert(metricsData);
 
-        // Create some alerts for services with issues
-        if (service.status === "degraded") {
+        // Create some alerts for services with issues (only if admin)
+        if (service.status === "degraded" && isAdmin) {
           await supabase.from("alerts").insert({
             service_id: service.id,
             type: "response_time",
@@ -257,7 +227,7 @@ const Index = () => {
       }
     }
 
-    toast.success("Mock data loaded successfully");
+    toast.success("Données de test chargées avec succès");
     fetchData();
   };
 
@@ -309,9 +279,18 @@ const Index = () => {
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Cloud Monitoring Dashboard</h1>
-          <p className="text-muted-foreground">Real-time monitoring for your microservices</p>
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground mb-2">Cloud Monitoring Dashboard</h1>
+            <p className="text-muted-foreground">
+              Surveillance en temps réel de vos microservices
+              {isAdmin && <span className="ml-2 text-xs bg-primary/10 text-primary px-2 py-1 rounded">Admin</span>}
+            </p>
+          </div>
+          <Button onClick={signOut} variant="outline" size="sm">
+            <LogOut className="h-4 w-4 mr-2" />
+            Déconnexion
+          </Button>
         </div>
 
         {/* Stats Overview */}
