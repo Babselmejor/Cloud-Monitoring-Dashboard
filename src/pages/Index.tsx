@@ -124,6 +124,61 @@ const Index = () => {
     };
   }, []);
 
+  // Real-time simulation: Update metrics every 5 seconds (admin only)
+  useEffect(() => {
+    if (!isAdmin) return; // Only admins can insert metrics
+    
+    const simulateMetrics = async () => {
+      if (services.length === 0) return;
+
+      // Generate new metrics for each service
+      for (const service of services) {
+        try {
+          const metricData = {
+            service_id: service.id,
+            cpu_usage: Math.round(Math.random() * 100 * 100) / 100,
+            memory_usage: Math.round(Math.random() * 100 * 100) / 100,
+            response_time: Math.floor(Math.random() * 500) + 50,
+          };
+
+          // Validate before inserting
+          metricSchema.parse(metricData);
+
+          await supabase.from("metrics").insert(metricData);
+
+          // Randomly update service status to make it more dynamic
+          if (Math.random() > 0.95) {
+            const statuses: ("up" | "down" | "degraded")[] = ["up", "degraded"];
+            const newStatus = statuses[Math.floor(Math.random() * statuses.length)];
+            
+            await supabase
+              .from("services")
+              .update({ status: newStatus })
+              .eq("id", service.id);
+
+            // Create alert if service becomes degraded
+            if (newStatus === "degraded" && metricData.response_time > 300) {
+              await supabase.from("alerts").insert({
+                service_id: service.id,
+                type: "response_time",
+                severity: "warning",
+                message: `${service.name} temps de réponse au-dessus du seuil`,
+                threshold: 300,
+                resolved: false,
+              });
+            }
+          }
+        } catch (error) {
+          // Silently skip validation errors
+        }
+      }
+    };
+
+    const interval = setInterval(simulateMetrics, 5000);
+
+    return () => clearInterval(interval);
+  }, [services, isAdmin]);
+
   const fetchData = async () => {
     setLoading(true);
     await Promise.all([fetchServices(), fetchMetrics(), fetchAlerts()]);
