@@ -229,11 +229,15 @@ const Index = () => {
   const seedMockData = async () => {
     if (!user) return;
 
-    // Check if we already have services
-    const { data: existingServices } = await supabase.from("services").select("id").limit(1);
+    // Check if THIS USER already has services (not all services in DB)
+    const { data: existingServices } = await supabase
+      .from("services")
+      .select("id")
+      .eq("user_id", user.id)
+      .limit(1);
 
     if (existingServices && existingServices.length > 0) {
-      return; // Data already exists
+      return; // This user already has services
     }
 
     // Create mock services
